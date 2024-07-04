@@ -1,0 +1,19 @@
+   Compiling replicate v0.1.0 (/Users/abhay/Code/Projects/replicate)
+error: no rules expected the token `Node`
+     --> /Users/abhay/Code/Projects/replicate/target/debug/build/replicate-63050f84436638f1/out/replica.rs:24605:16
+      |
+24605 |         chain!(Node("Self"), fields)
+      |                ^^^^ no rules expected this token in macro call
+      |
+     ::: src/lib.rs:7:1
+      |
+7     | macro_rules! chain {
+      | ------------------ when calling this macro
+      |
+note: while trying to match meta-variable `$typ:literal`
+     --> src/lib.rs:8:6
+      |
+8     |     ($typ:literal, $( $child:ident ),+) => {{
+      |      ^^^^^^^^^^^^
+
+error: could not compile `replicate` (lib) due to 1 previous error

@@ -1,0 +1,762 @@
+use crate::ast::*;
+use crate::symbol_table::*;
+grammar;
+
+match {
+    // Keywords
+    "node",
+    "if",
+    "else",
+    "match",
+    "default",
+    "while",
+    "for",
+    "break",
+    "continue",
+    "in",
+    "message",
+    "packet",
+    "datum",
+    "enum",
+    "send",
+    "yeet",
+    "to",
+    "reply",
+    "when",
+    "do",
+    "timer",
+    "signal",
+    "clock",
+    "fn",
+    "return",
+    "init",
+    "as",
+    "int",
+    "bool",
+    "float",
+    "str",
+    "self",
+    "Self",
+    "true",
+    "false",
+    "let",
+    "use"
+} else {
+    "||",
+    "=>" => Implies,
+    "->" => Arrow,
+    "::" => Scope,
+    ".." => Slice,
+    ">=" => GE,
+    "&&",
+    "++",
+    "--",
+    "+=",
+    "-=",
+    "*=",
+    "/=",
+    "%=",
+    "==" => Eq,
+    "!=" => Neq,
+    "<=" => LE,
+} else {
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+    // Special
+    ":",
+    ",",
+    ";",
+    ".",
+    // Operators
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "!",
+    "=",
+    "|",
+    "<",
+    ">",
+} else {
+    r"[a-zA-Z_][a-zA-Z0-9_]*" => Ident,
+    r"[0-9]+" => Lit_Int,
+    r#""([^"]|\\")*""# => Lit_Str,
+    r"[0-9]+\.[0-9]+" => Lit_Float,
+}
+
+Comma<T>: Vec<T> = {
+    <h: (<T> ",")*> <t: T?> => {
+        h.into_iter().chain(t).collect()
+    }
+}
+
+Semicolon<T>: Vec<T> = {
+    <h: (<T> ";")*> <t: T?> => {
+        h.into_iter().chain(t).collect()
+    }
+}
+
+#[inline]
+Sequence<T>: Vec<T> = {
+    <h: (<T>)*>=> {
+        h
+    }
+}
+
+ScopedPath<T>: Vec<T> = {
+    <h: (<T> Scope)*> <t: T?> => {
+        h.into_iter().chain(t).collect()
+    }
+}
+
+pub File: Vec<ASTNode<'input>> = {
+    Sequence<Component>
+}
+
+Component: ASTNode<'input> = {
+    Function, Struct, Enum, Node, Init, Handler
+}
+
+Importables: Importable<'input> = {
+    Ident => Importable::Item(<>), "*" => Importable::Wildcard
+}
+
+Import: ASTNode<'input> = {
+    "use" <path:ScopedPath<Importables>> ";" => {
+        let imps = ImportPath {path: <>};
+        let q = ASTNode::new(ASTNodeType::Import(imps));
+        q
+    }
+}
+
+Init: ASTNode<'input> = {
+    "init" <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Init);
+        q.add_child(body);
+        q
+    }
+}
+
+Node: ASTNode<'input> = {
+    "Self" "{" <fields:Fields> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Node("Self"));
+        q.add_child(fields);
+        q
+    },
+    "node" <name:Ident> "{" <fields:Fields> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Node(name));
+        q.add_child(fields);
+        q
+    }
+}
+
+Literal: ASTNode<'input> = {
+    Lit_Float => ASTNode::new(ASTNodeType::Literal(<>)),
+    Lit_Int => ASTNode::new(ASTNodeType::Literal(<>)),
+    Lit_Str => ASTNode::new(ASTNodeType::Literal(<>)),
+    "true"  => ASTNode::new(ASTNodeType::Literal(<>)),
+    "false" => ASTNode::new(ASTNodeType::Literal(<>))
+}
+
+Expr: ASTNode<'input> = {
+    LogExpr
+}
+LogExpr: ASTNode<'input> = {
+    #[precedence(level="0")]
+    OrdExpr,
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:LogExpr> "&&" <rhs:OrdExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Logical("&&"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:LogExpr> "||" <rhs:OrdExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Logical("||"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    }
+}
+
+OrdExpr: ASTNode<'input> = {
+    #[precedence(level="0")]
+    EqExpr,
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:OrdExpr> "<" <rhs:EqExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Ord("<"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:OrdExpr> LE <rhs:EqExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Ord("<="), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:OrdExpr> ">" <rhs:EqExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Ord(">"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:OrdExpr> GE <rhs:EqExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Ord(">="), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+}
+
+EqExpr: ASTNode<'input> = {
+    #[precedence(level="0")]
+    ArithExpr,
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:EqExpr> Eq <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Eq("=="), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:EqExpr> Neq <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Eq("!="), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    }
+}
+
+ArithExpr: ASTNode<'input> = {
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:ArithExpr> "*" <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Arithmetic("*"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:ArithExpr> "/" <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Arithmetic("/"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:ArithExpr> "%" <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Arithmetic("/"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    #[precedence(level="2")] #[assoc(side="left")]
+    <lhs:ArithExpr> "+" <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Arithmetic("+"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    <lhs:ArithExpr> "-" <rhs:ArithExpr> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Arithmetic("-"), Type::dummy()));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    },
+    #[precedence(level="0")]
+    TypeCast
+}
+
+TypeCast: ASTNode<'input> = {
+    #[precedence(level="0")]
+    Invert,
+    #[precedence(level="1")] #[assoc(side="left")]
+    <e1:Invert> "as" "(" <t:Type> ")" => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::TypeCast, t));
+        q.add_child(e1);
+        q
+    }
+}
+
+Invert: ASTNode<'input> = {
+    #[precedence(level="0")]
+    BracketOp,
+    #[precedence(level="1")] #[assoc(side="right")]
+    "!" <e:Invert> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Logical("!"), Type::dummy()));
+        q.add_child(e);
+        q
+    },
+    "-" <e:Invert> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Negate, Type::dummy()));
+        q.add_child(e);
+        q
+    }
+}
+
+BracketOp: ASTNode<'input> = {
+    #[precedence(level="0")]
+    Access,
+    FunctionCall, Index
+}
+
+FunctionCall: ASTNode<'input> = {
+    <func:Access> "(" <args:Comma<Expr>> ")" => {
+        let mut out = ASTNode::new(ASTNodeType::Expression(Operator::Call, Type::dummy()));
+        out.add_child(func);
+        out.add_children(args);
+        out
+    }
+}
+
+Index: ASTNode<'input> = {
+    <vector:Access> "[" <index:Expr> "]" => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::Index, Type::dummy()));
+        q.add_child(vector);
+        q.add_child(index);
+        q
+    }
+}   
+
+Access: ASTNode<'input> = {
+    FieldAccess, TupleAccess, EnumAccess, Unit
+}
+
+FieldAccess: ASTNode<'input> = {
+    <obj:Access> "." <field:Ident> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::FieldAccess, Type::dummy()));
+        q.add_child(obj);
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(field)));
+        q
+    },
+}
+
+TupleAccess: ASTNode<'input> = {
+    <obj:Access> "." <field:Lit_Int> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::TupleAccess, Type::dummy()));
+        q.add_child(obj);
+        q.add_child(ASTNode::new(ASTNodeType::Literal(field)));
+        q
+    }
+}
+
+EnumAccess: ASTNode<'input> = {
+    <obj:Ident> Scope <var:Ident> => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::EnumAccess, Type::dummy()));
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(obj)));
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(var)));
+        q
+    }
+}
+
+Unit: ASTNode<'input> = {
+    "(" <Expr> ")",
+    "[" <Comma<Expr>> "]" => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::None, Type::new(InnerType::Vec)));
+        q.add_children(<>);
+        q
+    },
+    "[" <Expr> ";" <Expr> "]" => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::None, Type::new(InnerType::Vec)));
+        q.add_children(vec![<>]);
+        q
+    },
+    "(" <e:(<Expr> ",")+> ")" => {
+        let mut q = ASTNode::new(ASTNodeType::Expression(Operator::None, Type::new(InnerType::Vec)));
+        q.add_children(<>);
+        q
+    },
+    Ident => ASTNode::new(ASTNodeType::Identifier(<>)),
+    Literal,
+    Constructor,
+    "self" => ASTNode::new(ASTNodeType::SelfRef),
+}
+
+
+Function: ASTNode<'input> = {
+    "fn" <fh:FunctionHeader> <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Function);
+        q.add_child(fh);
+        q.add_child(body);
+        q   
+    }
+};
+
+FunctionHeader: ASTNode<'input> = {
+    <name:Ident> "(" <args:Comma<TypeVar>> ")" <t:(Arrow <Type>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::FunctionHeader(name));
+        q.add_children(args);
+        if let Some(t) = t {
+            q.add_child(ASTNode::new(ASTNodeType::Type(t)));
+        }
+        q
+    },
+    <obj:Type> "." <name:Ident> "(" <args:Comma<TypeVar>> ")" <t:(Arrow <Type>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::FunctionHeader(name));
+        q.add_children(args);
+        if let Some(t) = t {
+            q.add_child(ASTNode::new(ASTNodeType::Type(t)));
+        }
+        let mut out = ASTNode::new(ASTNodeType::MethodHeader); 
+        out.add_child(ASTNode::new(ASTNodeType::Type(obj)));
+        out.add_child(q);
+        out
+    }
+};
+
+Fields: ASTNode<'input> = {
+    <fields:Comma<TypeVar>> => {
+        let mut q = ASTNode::new(ASTNodeType::Fields);
+        q.add_children(fields);
+        q
+    }
+};
+
+Message: ASTNode<'input> = {
+    "message" <name:Ident> "{" <fields:Fields> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Struct(StructTypes::Message, name));
+        q.add_child(fields);
+        q
+    }
+};
+
+Packet: ASTNode<'input> = {
+    "packet" <name:Ident> "{" <fields:Fields> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Struct(StructTypes::Packet, name));
+        q.add_child(fields);
+        q
+    }
+};
+
+Datum: ASTNode<'input> = {
+    "datum" <name:Ident> "{" <fields:Fields> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Struct(StructTypes::Datum, name));
+        q.add_child(fields);
+        q
+    }
+};
+
+pub Struct = {
+    Message, Packet, Datum
+}
+
+pub Enum: ASTNode<'input> = {
+    "enum" <name:Ident> "{" <variants:Comma<Ident>> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Enum(name));
+        let v = ASTNode::new(ASTNodeType::EnumVariants(variants));
+        q.add_child(v);
+        q
+    }
+};
+
+// Conditionals
+
+IfBlock: ASTNode<'input> = {
+    "if" <cond:Expr> <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::If));
+        let mut header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::If));
+        header.add_child(cond);
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+};
+
+ElseIfBlock: ASTNode<'input> = {
+    "else" "if" <cond:Expr> <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::ElseIf));
+        let mut header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::ElseIf));
+        header.add_child(cond);
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+};
+
+ElseBlock: ASTNode<'input> = {
+    "else" <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::Else));
+        // Superfluous, but normalised.
+        let header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::Else));
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+};
+
+IfLadder: ASTNode<'input> = {
+    <if_block:IfBlock> <elif_block:Sequence<ElseIfBlock>> <else_block:ElseBlock?> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::IfLadder));
+        q.add_child(if_block);
+        q.add_children(elif_block);
+        if let Some(else_block) = else_block {
+            q.add_child(else_block);
+        }
+        q
+    }
+};
+
+MatchBlock: ASTNode<'input> = {
+    "match" <expr:Expr> "{" <cases:Comma<Case>> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::Match));
+        let mut header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::Match));
+        header.add_child(expr);
+        q.add_child(header);
+        let mut cl = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::CaseList));
+        cl.add_children(cases);
+        q.add_child(cl);
+        q
+    }
+};
+
+Case: ASTNode<'input> = {
+    "(" <pat: Expr> ")" Implies <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::Case));
+        let mut header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::Case));
+        header.add_child(pat);
+        q.add_child(header);
+        q.add_child(body);
+        q
+    },
+    "default" Implies <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Conditional(ConditionalTypes::Case));
+        let header = ASTNode::new(ASTNodeType::ConditionalHeader(ConditionalTypes::Case));
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+}
+
+// Loops
+
+ForLoop: ASTNode<'input> = {
+    "for" <header:ForHeader> <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Loop(LoopTypes::For));
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+}
+
+ForHeader: ASTNode<'input> = {
+    "(" <d:Declaration?> ";" <c:Expr?> ";" <a:Assignment?> ")" => {
+        let mut q = ASTNode::new(ASTNodeType::LoopHeader(LoopTypes::For));
+        if let Some(d) = d {
+            q.add_child(d);
+        }
+        if let Some(c) = c {
+            q.add_child(c);
+        }
+        if let Some(a) = a {
+            q.add_child(a);
+        }
+        q
+    },
+    <v:Ident> "in" <r:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::LoopHeader(LoopTypes::For));
+        q.add_children(vec![ASTNode::new(ASTNodeType::Identifier(v)), r]);
+        q
+    }
+}
+
+WhileLoop: ASTNode<'input> = {
+    "while" <header:WhileHeader> <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Loop(LoopTypes::While));
+        q.add_child(header);
+        q.add_child(body);
+        q
+    }
+}
+
+WhileHeader: ASTNode<'input> = {
+    <c:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::LoopHeader(LoopTypes::While));
+        q.add_child(c);
+        q
+    }
+}
+
+Loop: ASTNode<'input> = {
+    ForLoop, WhileLoop
+}
+
+Conditional: ASTNode<'input> = {
+    IfLadder, MatchBlock
+}
+
+
+
+TypeVar: ASTNode<'input> = {
+    <name:Ident> ":" <t:Type> => {
+        let mut q = ASTNode::new(ASTNodeType::TypeVar);
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(name)));
+        q.add_child(ASTNode::new(ASTNodeType::Type(t)));
+        q
+    }
+};
+
+Type: Type<'input> = {
+    "int" => {
+        Type::new(InnerType::Int)
+    },
+    "bool" => {
+        Type::new(InnerType::Bool)
+    },
+    "float" => {
+        Type::new(InnerType::Float)
+    },
+    "str" => {
+        Type::new(InnerType::String)
+    },
+    "[" <t:Type> "]" => {
+        let mut q = Type::new(InnerType::Vec);
+        q.add_child(t);
+        q
+    },
+    "(" <h:(<Type> ",")+> <t:Type?>")" => {
+        let mut q = Type::new(InnerType::Tuple);
+        q.add_children(h);
+        if let Some(t) = t {
+            q.add_child(t);
+        }
+        q
+    },
+    Ident => {
+        Type::new(InnerType::Struct(StructTypes::Unknown, <>))
+    },
+    "Self" => {
+        Type::new(InnerType::SelfRef)
+    }
+}
+
+Body: ASTNode<'input> = {
+    "{" <stmts:Sequence<Stmt>> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Body);
+        q.add_children(stmts);
+        q
+    }
+};
+
+Stmt: ASTNode<'input> = {
+    <Declaration> ";",
+    <Assignment> ";",
+    <FunctionCall> ";",
+    <Send> ";",
+    <Jump> ";",
+    Conditional,
+    Loop
+};
+
+Declaration: ASTNode<'input> = {
+    "let" <t:TypeVar> <rhs: ("=" <Expr>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::Statement(StatementTypes::Declaration));
+        q.add_child(t);
+        if let Some(rhs) = rhs {
+            q.add_child(rhs);
+        }
+        q
+    },
+    "let" <t:Ident> <rhs: ("=" <Expr>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::Statement(StatementTypes::Declaration));
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(t)));
+        if let Some(rhs) = rhs {
+            q.add_child(rhs);
+        }
+        q
+    }
+}
+
+AssignOp: Operator<'input> = {
+    "=" => Operator::AssignOp("="),
+    "+=" => Operator::AssignOp("+="),
+    "-=" => Operator::AssignOp("-="),
+    "*=" => Operator::AssignOp("*="),
+    "/=" => Operator::AssignOp("/="),
+    "%=" => Operator::AssignOp("%="),
+}
+
+Assignment: ASTNode<'input> = {
+    <lhs:Expr> <op:AssignOp> <rhs:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::Statement(StatementTypes::Assignment));
+        q.add_child(lhs);
+        q.add_child(rhs);
+        q
+    }
+}
+
+Handler: ASTNode<'input> = {
+    "when" <event:Ident> "do" <body:Body> => {
+        let mut q = ASTNode::new(ASTNodeType::Handler(event));
+        q.add_child(body);
+        q
+    }
+}
+
+EventKw: EventType = {
+    "timer" => EventType::Timer, "signal" => EventType::Signal, "clock" => EventType::Clock
+}
+
+Event: ASTNode<'input> = {
+    <e:EventKw> <name:Ident> <x:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::Event(e, name));
+        q.add_child(x);
+        q
+    }
+}
+
+Constructor: ASTNode<'input> = {
+    "|" <name:Ident> "|" "{" <args:Comma<ExprVar>> "}" => {
+        let mut q = ASTNode::new(ASTNodeType::Constructor(name));
+        q.add_children(args);
+        q
+    }
+}
+
+ExprVar: ASTNode<'input> = {
+    <var:Ident> ":" <ex:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::ExprVar);
+        q.add_child(ASTNode::new(ASTNodeType::Identifier(var)));
+        q.add_child(ex);
+        q
+    }
+}
+
+Protocol: SendAction = {
+    "send" => SendAction::Send, 
+    "yeet" => SendAction::Yeet
+}
+
+Send: ASTNode<'input> = {
+    <k:Protocol> <msg:Expr> <dest:("to" <Expr>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::Send(k));
+        q.add_child(msg);
+        if let Some(dest) = dest {
+            q.add_child(dest);
+        }
+        q
+    },
+    "reply" <msg:Expr> => {
+        let mut q = ASTNode::new(ASTNodeType::Send(SendAction::Reply));
+        q.add_child(msg);
+        q
+    }
+}
+
+JumpKw: JumpTypes = {
+    "break" => JumpTypes::Break, 
+    "continue" => JumpTypes::Continue, 
+    "return" => JumpTypes::Return
+}
+
+Jump: ASTNode<'input> = {
+    <j:JumpKw> <e:(<Expr>)?> => {
+        let mut q = ASTNode::new(ASTNodeType::Statement(StatementTypes::Jump(j)));
+        if let Some(e) = e {
+            q.add_child(e);
+        }
+        q
+    }
+}

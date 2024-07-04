@@ -1,0 +1,57 @@
+fn foo() {
+    let x = 3;
+}
+
+message M {
+    a: int,
+    b: str,
+    c: X
+}
+
+datum X {}
+
+fn M.bar() {
+    let q = |M| {
+        a: 3,
+        b: "hello",
+        c: |X| {}
+    };
+    let y = 4;
+}
+
+enum x {
+    a,
+    b, c
+}
+
+when M do {
+    print("bb");
+    reply |M| {
+        a: 3,
+        b: "hello",
+        c: |X| {}
+    };
+    send |M| {
+        a: 3,
+        b: "dudes",
+        c: |X| {}
+    };
+}
+
+node NotANode {
+    this: int,
+    is: str,
+    a: X,
+    field: bool
+}
+
+fn Self.foo() {
+    let x = 3;
+}
+
+init {
+    let x = 3;
+    foo();
+    let q = x::a;
+    let r = m.bar();
+}
